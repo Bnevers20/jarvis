@@ -1,6 +1,5 @@
 -- ════════════════════════════════════════════════════════════════
--- JARVIS — initial schema  (DRAFT — pending approval of decisions #1-5)
--- NOT YET APPLIED to any Supabase project. Review, then we run it.
+-- JARVIS — initial schema. Applied to project `jarvis` (prowyutfsxvdlczpbpip).
 --
 -- Single-user system: every table is RLS-locked to the owner's uid.
 -- The server (service-role key) bypasses RLS for node dispatch, cron,
@@ -22,16 +21,14 @@ create table profiles (
 );
 
 -- ── memories: pgvector long-term memory ─────────────────────────
--- DECISION #1: vector dimension follows the embedding provider.
---   Voyage voyage-3-lite → 512   (recommended default, below)
---   Supabase gte-small   → 384
---   OpenAI  3-small      → 1536
+-- DECISION #1 (locked): Supabase gte-small → vector(384). Free, no new
+-- vendor. Upgrade path: swap provider + widen this column, then re-embed.
 create table memories (
   id         uuid primary key default gen_random_uuid(),
   user_id    uuid not null references profiles(id) on delete cascade,
   kind       text not null check (kind in ('fact','preference','summary')),
   content    text not null,
-  embedding  vector(512),
+  embedding  vector(384),
   source     text,                       -- e.g. 'chat', 'remember-command'
   metadata   jsonb not null default '{}',
   created_at timestamptz not null default now()
