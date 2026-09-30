@@ -69,12 +69,30 @@ export async function POST(req: Request) {
     return new Response("No messages provided.", { status: 400 });
   }
 
+  // Personalization: how the owner wants to be addressed + tone.
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("settings")
+    .eq("id", user!.id)
+    .single();
+  const prefs = (profile?.settings ?? {}) as { call_me?: string; tone?: string };
+  const persona =
+    (prefs.call_me && prefs.call_me.toLowerCase() !== "sir"
+      ? `\n\nAddress the user as "${prefs.call_me}" (in place of "sir").`
+      : "") +
+    (prefs.tone === "warm"
+      ? "\nLean warmer and more encouraging than your usual dry default."
+      : prefs.tone === "brief"
+        ? "\nBe extra brief and all-business — skip pleasantries."
+        : "");
+
   // Recall relevant long-term memories for the latest user turn.
   const lastUser =
     [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
   const memories = lastUser ? await retrieveMemories(supabase, lastUser) : [];
   const system =
     JARVIS_SYSTEM +
+    persona +
     (memories.length
       ? `\n\nRelevant things you remember about the user (use naturally; don't recite verbatim):\n${memories
           .map((m) => `- ${m}`)

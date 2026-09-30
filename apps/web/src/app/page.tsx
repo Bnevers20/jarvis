@@ -49,6 +49,14 @@ export default function Home() {
   return (
     <main className="min-h-dvh bg-[#05070d] text-slate-100 flex flex-col items-center">
       <div className="relative w-full max-w-2xl flex flex-col h-dvh px-4">
+        {/* settings */}
+        <a
+          href="/settings"
+          className="absolute top-4 left-4 text-[11px] uppercase tracking-widest text-slate-600 hover:text-slate-300"
+        >
+          Settings
+        </a>
+
         {/* sign out */}
         <form action="/auth/signout" method="post" className="absolute top-4 right-4">
           <button

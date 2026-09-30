@@ -11,6 +11,11 @@ function isAuthRoute(path: string) {
 }
 
 export async function updateSession(request: NextRequest) {
+  // Cron endpoints authenticate with CRON_SECRET, not a user session.
+  if (request.nextUrl.pathname.startsWith("/api/cron")) {
+    return NextResponse.next({ request });
+  }
+
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
