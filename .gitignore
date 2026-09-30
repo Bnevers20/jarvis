@@ -1,0 +1,27 @@
+# dependencies
+node_modules/
+.pnp.*
+
+# builds
+.next/
+out/
+dist/
+build/
+apps/node-agent/src-tauri/target/
+
+# env / secrets — NEVER commit
+.env
+.env.*
+!.env.example
+
+# vercel / supabase
+.vercel/
+supabase/.branches/
+supabase/.temp/
+
+# misc
+.DS_Store
+*.log
+npm-debug.log*
+.turbo/
+coverage/

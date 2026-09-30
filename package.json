@@ -1,0 +1,16 @@
+{
+  "name": "jarvis",
+  "private": true,
+  "version": "0.1.0",
+  "description": "JARVIS — personal AI assistant. One backend brain, three clients, node agents.",
+  "workspaces": [
+    "apps/web",
+    "packages/shared"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w apps/web",
+    "build": "npm run build -w apps/web",
+    "lint": "npm run lint -w apps/web",
+    "start": "npm run start -w apps/web"
+  }
+}
