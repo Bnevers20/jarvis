@@ -1,51 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { JARVIS_MODEL, JARVIS_SYSTEM } from "@/lib/claude";
 import { createClient } from "@/lib/supabase/server";
-import {
-  retrieveMemories,
-  rememberFact,
-  forgetFact,
-  type MemoryKind,
-} from "@/lib/memory";
+import { retrieveMemories } from "@/lib/memory";
+import { ALL_TOOLS, runTool } from "@/lib/tools";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 type ChatMessage = { role: "user" | "assistant"; content: string };
-
-const TOOLS: Anthropic.Tool[] = [
-  {
-    name: "remember",
-    description:
-      "Save a durable fact or preference about the user to long-term memory. Use when the user shares something worth recalling in future conversations, or explicitly asks you to remember it. Phrase the content as a standalone statement.",
-    input_schema: {
-      type: "object",
-      properties: {
-        content: {
-          type: "string",
-          description: "The fact to remember, as a standalone statement.",
-        },
-        kind: { type: "string", enum: ["fact", "preference", "summary"] },
-      },
-      required: ["content"],
-    },
-  },
-  {
-    name: "forget",
-    description:
-      "Delete the single memory that best matches a description. Use when the user asks you to forget something.",
-    input_schema: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description: "A description of what to forget.",
-        },
-      },
-      required: ["query"],
-    },
-  },
-];
 
 export async function POST(req: Request) {
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -69,13 +31,14 @@ export async function POST(req: Request) {
     return new Response("No messages provided.", { status: 400 });
   }
 
-  // Personalization: how the owner wants to be addressed + tone.
+  // Personalization: how the owner wants to be addressed + tone + timezone.
   const { data: profile } = await supabase
     .from("profiles")
-    .select("settings")
+    .select("settings, timezone")
     .eq("id", user!.id)
     .single();
   const prefs = (profile?.settings ?? {}) as { call_me?: string; tone?: string };
+  const tz = profile?.timezone || "America/Detroit";
   const persona =
     (prefs.call_me && prefs.call_me.toLowerCase() !== "sir"
       ? `\n\nAddress the user as "${prefs.call_me}" (in place of "sir").`
@@ -86,6 +49,13 @@ export async function POST(req: Request) {
         ? "\nBe extra brief and all-business — skip pleasantries."
         : "");
 
+  const nowStr = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    dateStyle: "full",
+    timeStyle: "short",
+  }).format(new Date());
+  const clock = `\n\nThe current date and time is ${nowStr} (${tz}). Use this for reminders and any time-based questions; compute ISO 8601 values for tool calls from it.`;
+
   // Recall relevant long-term memories for the latest user turn.
   const lastUser =
     [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
@@ -93,6 +63,7 @@ export async function POST(req: Request) {
   const system =
     JARVIS_SYSTEM +
     persona +
+    clock +
     (memories.length
       ? `\n\nRelevant things you remember about the user (use naturally; don't recite verbatim):\n${memories
           .map((m) => `- ${m}`)
@@ -115,39 +86,40 @@ export async function POST(req: Request) {
   const readable = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
-        // Agentic loop: stream text each turn; run memory tools between turns.
-        for (let turn = 0; turn < 6; turn++) {
+        // Agentic loop: stream text each turn; run tools between turns.
+        // web_search runs server-side (may pause_turn); custom tools run here.
+        for (let turn = 0; turn < 8; turn++) {
           const stream = anthropic.messages.stream({
             model: JARVIS_MODEL,
             max_tokens: 4096,
             system,
             messages: convo,
-            tools: TOOLS,
+            tools: ALL_TOOLS,
           });
           stream.on("text", (d) => controller.enqueue(encoder.encode(d)));
           const final = await stream.finalMessage();
           convo.push({ role: "assistant", content: final.content });
+
+          // Server tool paused mid-loop — resend to let it continue.
+          if (final.stop_reason === "pause_turn") continue;
           if (final.stop_reason !== "tool_use") break;
 
           const results: Anthropic.ToolResultBlockParam[] = [];
           for (const block of final.content) {
             if (block.type !== "tool_use") continue;
-            let out = "Done.";
-            if (block.name === "remember") {
-              const input = block.input as { content: string; kind?: MemoryKind };
-              const ok = await rememberFact(supabase, input.content, input.kind);
-              out = ok ? "Saved to memory." : "Could not save that.";
-            } else if (block.name === "forget") {
-              const input = block.input as { query: string };
-              const gone = await forgetFact(supabase, input.query);
-              out = gone ? `Forgotten: "${gone}"` : "Nothing matching to forget.";
-            }
+            const out = await runTool(
+              supabase,
+              user!.id,
+              block.name,
+              block.input as Record<string, string | undefined>,
+            );
             results.push({
               type: "tool_result",
               tool_use_id: block.id,
               content: out,
             });
           }
+          if (!results.length) break;
           convo.push({ role: "user", content: results });
         }
         controller.close();

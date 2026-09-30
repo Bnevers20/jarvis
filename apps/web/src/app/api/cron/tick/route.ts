@@ -96,5 +96,32 @@ export async function GET(req: NextRequest) {
       fired++;
     }
   }
+
+  // Task reminders due now (remind_at passed, not yet reminded).
+  const { data: dueTasks } = await admin
+    .from("tasks")
+    .select("id, user_id, title")
+    .eq("status", "open")
+    .is("reminded_at", null)
+    .not("remind_at", "is", null)
+    .lte("remind_at", new Date().toISOString());
+  for (const t of (dueTasks ?? []) as {
+    id: string;
+    user_id: string;
+    title: string;
+  }[]) {
+    await sendPushToUser(admin, t.user_id, {
+      title: "JARVIS",
+      body: `Reminder: ${t.title}`,
+      speak: `Reminder, sir. ${t.title}`,
+      tag: `task-${t.id}`,
+    });
+    await admin
+      .from("tasks")
+      .update({ reminded_at: new Date().toISOString() })
+      .eq("id", t.id);
+    fired++;
+  }
+
   return NextResponse.json({ ok: true, fired });
 }
