@@ -1,12 +1,51 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { JARVIS_MODEL, JARVIS_SYSTEM } from "@/lib/claude";
 import { createClient } from "@/lib/supabase/server";
+import {
+  retrieveMemories,
+  rememberFact,
+  forgetFact,
+  type MemoryKind,
+} from "@/lib/memory";
 
-// Node runtime; allow the model room to respond before the platform times out.
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 type ChatMessage = { role: "user" | "assistant"; content: string };
+
+const TOOLS: Anthropic.Tool[] = [
+  {
+    name: "remember",
+    description:
+      "Save a durable fact or preference about the user to long-term memory. Use when the user shares something worth recalling in future conversations, or explicitly asks you to remember it. Phrase the content as a standalone statement.",
+    input_schema: {
+      type: "object",
+      properties: {
+        content: {
+          type: "string",
+          description: "The fact to remember, as a standalone statement.",
+        },
+        kind: { type: "string", enum: ["fact", "preference", "summary"] },
+      },
+      required: ["content"],
+    },
+  },
+  {
+    name: "forget",
+    description:
+      "Delete the single memory that best matches a description. Use when the user asks you to forget something.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "A description of what to forget.",
+        },
+      },
+      required: ["query"],
+    },
+  },
+];
 
 export async function POST(req: Request) {
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -30,7 +69,18 @@ export async function POST(req: Request) {
     return new Response("No messages provided.", { status: 400 });
   }
 
-  // Org-scoped keys need a workspace id header; workspace-scoped keys don't.
+  // Recall relevant long-term memories for the latest user turn.
+  const lastUser =
+    [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+  const memories = lastUser ? await retrieveMemories(supabase, lastUser) : [];
+  const system =
+    JARVIS_SYSTEM +
+    (memories.length
+      ? `\n\nRelevant things you remember about the user (use naturally; don't recite verbatim):\n${memories
+          .map((m) => `- ${m}`)
+          .join("\n")}`
+      : "");
+
   const workspaceId = process.env.ANTHROPIC_WORKSPACE_ID;
   const anthropic = new Anthropic(
     workspaceId
@@ -39,17 +89,49 @@ export async function POST(req: Request) {
   );
   const encoder = new TextEncoder();
 
+  const convo: Anthropic.MessageParam[] = messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+
   const readable = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
-        const stream = anthropic.messages.stream({
-          model: JARVIS_MODEL,
-          max_tokens: 4096,
-          system: JARVIS_SYSTEM,
-          messages,
-        });
-        stream.on("text", (delta) => controller.enqueue(encoder.encode(delta)));
-        await stream.finalMessage();
+        // Agentic loop: stream text each turn; run memory tools between turns.
+        for (let turn = 0; turn < 6; turn++) {
+          const stream = anthropic.messages.stream({
+            model: JARVIS_MODEL,
+            max_tokens: 4096,
+            system,
+            messages: convo,
+            tools: TOOLS,
+          });
+          stream.on("text", (d) => controller.enqueue(encoder.encode(d)));
+          const final = await stream.finalMessage();
+          convo.push({ role: "assistant", content: final.content });
+          if (final.stop_reason !== "tool_use") break;
+
+          const results: Anthropic.ToolResultBlockParam[] = [];
+          for (const block of final.content) {
+            if (block.type !== "tool_use") continue;
+            let out = "Done.";
+            if (block.name === "remember") {
+              const input = block.input as { content: string; kind?: MemoryKind };
+              const ok = await rememberFact(supabase, input.content, input.kind);
+              out = ok ? "Saved to memory." : "Could not save that.";
+            } else if (block.name === "forget") {
+              const input = block.input as { query: string };
+              const gone = await forgetFact(supabase, input.query);
+              out = gone ? `Forgotten: "${gone}"` : "Nothing matching to forget.";
+            }
+            results.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              content: out,
+            });
+          }
+          convo.push({ role: "user", content: results });
+        }
         controller.close();
       } catch (err) {
         const msg = err instanceof Error ? err.message : "unknown error";
