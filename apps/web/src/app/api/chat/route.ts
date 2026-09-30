@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { JARVIS_MODEL, JARVIS_SYSTEM } from "@/lib/claude";
+import { createClient } from "@/lib/supabase/server";
 
 // Node runtime; allow the model room to respond before the platform times out.
 export const runtime = "nodejs";
@@ -15,12 +16,27 @@ export async function POST(req: Request) {
     );
   }
 
+  // Owner-only: the brain never answers an unauthenticated caller.
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (user?.email?.toLowerCase() !== process.env.OWNER_EMAIL?.toLowerCase()) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
   const { messages } = (await req.json()) as { messages: ChatMessage[] };
   if (!Array.isArray(messages) || messages.length === 0) {
     return new Response("No messages provided.", { status: 400 });
   }
 
-  const anthropic = new Anthropic();
+  // Org-scoped keys need a workspace id header; workspace-scoped keys don't.
+  const workspaceId = process.env.ANTHROPIC_WORKSPACE_ID;
+  const anthropic = new Anthropic(
+    workspaceId
+      ? { defaultHeaders: { "anthropic-workspace-id": workspaceId } }
+      : {},
+  );
   const encoder = new TextEncoder();
 
   const readable = new ReadableStream<Uint8Array>({

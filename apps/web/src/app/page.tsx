@@ -48,7 +48,17 @@ export default function Home() {
 
   return (
     <main className="min-h-dvh bg-[#05070d] text-slate-100 flex flex-col items-center">
-      <div className="w-full max-w-2xl flex flex-col h-dvh px-4">
+      <div className="relative w-full max-w-2xl flex flex-col h-dvh px-4">
+        {/* sign out */}
+        <form action="/auth/signout" method="post" className="absolute top-4 right-4">
+          <button
+            type="submit"
+            className="text-[11px] uppercase tracking-widest text-slate-600 hover:text-slate-300"
+          >
+            Sign out
+          </button>
+        </form>
+
         {/* header + orb */}
         <header className="flex flex-col items-center pt-10 pb-6 shrink-0">
           <div
